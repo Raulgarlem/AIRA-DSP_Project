@@ -1,0 +1,7 @@
+caso,metodo,fuente,angulo_real,angulo_estimado,error_doa_grados,si_sdr_db,si_sdri_db,correlacion,localizacion_ms,separacion_ms
+clean-3source,das_adaptive,1,-30.00,-33.00,3.00,-2.2681,1.8923,0.6102,4416.6338,8415.3950
+clean-3source,das_adaptive,2,90.00,85.00,5.00,-10.1137,1.1885,0.2979,4416.6338,8415.3950
+clean-3source,das_adaptive,3,-150.00,-143.00,7.00,-4.6076,3.2578,0.5071,4416.6338,8415.3950
+clean-3source,srp_mvdr,1,-30.00,-32.00,2.00,-7.9691,-3.8088,0.3710,4416.6338,40816.6001
+clean-3source,srp_mvdr,2,90.00,88.00,2.00,-14.8803,-3.5780,0.1774,4416.6338,40816.6001
+clean-3source,srp_mvdr,3,-150.00,-146.00,4.00,-1.3736,6.4918,0.6493,4416.6338,40816.6001

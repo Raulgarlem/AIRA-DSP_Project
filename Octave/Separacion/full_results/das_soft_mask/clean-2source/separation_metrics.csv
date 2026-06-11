@@ -1,0 +1,5 @@
+method,source,true_angle_deg,estimated_angle_deg,si_sdr_db,correlation
+das,1,-30.00,-28.00,-16.691343,0.144821
+soft_mask,1,-30.00,-28.00,-16.651478,0.145473
+das,2,90.00,86.00,-20.534790,0.093616
+soft_mask,2,90.00,86.00,-18.998835,0.111517

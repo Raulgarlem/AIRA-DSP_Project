@@ -1,0 +1,23 @@
+Caso: clean-2source
+Metodo: DAS en frecuencia, diapositivas 1-48
+Ecuacion: S_hat(f) = W(f)^H X(f) / M
+Frecuencia de muestreo: 48000 Hz
+Muestras: 1539072
+Duracion: 32.064000 s
+Relleno por extremo: 1024 muestras
+Pico objetivo: 0.9500
+RMS objetivo: -20.00 dBFS
+Ganancia comun previa al DAS: 1.180481908
+Angulos reales: -30.00 90.00
+Angulos estimados: -28.00 86.00
+Tiempo de separacion: 4.714701 s
+Fuente 1, DOA -28.00 grados
+  DAS: pico=0.590446, RMS=-22.055 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source1_das.wav
+  Pico: pico=0.950000, RMS=-17.924 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source1_peak_normalized.wav
+  RMS: pico=0.748033, RMS=-20.000 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source1_rms_-20dBFS.wav
+  Normalizacion previa: pico=0.697010, RMS=-20.614 dBFS, correlacion=1.000000000, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source1_pre_normalized_das.wav
+Fuente 2, DOA 86.00 grados
+  DAS: pico=0.461865, RMS=-24.064 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source2_das.wav
+  Pico: pico=0.950000, RMS=-17.800 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source2_peak_normalized.wav
+  RMS: pico=0.737428, RMS=-20.000 dBFS, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source2_rms_-20dBFS.wav
+  Normalizacion previa: pico=0.545223, RMS=-22.623 dBFS, correlacion=1.000000000, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\slides_1_48\clean-2source\source2_pre_normalized_das.wav

@@ -1,0 +1,5 @@
+method,source,true_angle_deg,estimated_angle_deg,si_sdr_db,correlation
+center_das,1,-30.00,-28.00,-16.692779,0.144797
+triple_sum,1,-30.00,-28.00,-16.691193,0.144823
+center_das,2,90.00,86.00,-20.531992,0.093646
+triple_sum,2,90.00,86.00,-20.528007,0.093688

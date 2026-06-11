@@ -1,0 +1,4 @@
+caso,metodo,angulos_reales,angulos_estimados,errores_por_fuente_grados,error_medio_grados,tramas,porcentaje_mascara,conmutaciones,decisiones_validas,bins_activos_medios,bins_efectivos_medios,peso_medio,analisis_ms,das_dual_ms,decision_ms,total_por_ventana_ms
+clean-3source,DAS base,"-30.00 90.00 -150.00","-142.00 -32.00 83.00","2.00 7.00 8.00",5.666667,92,45.652,3,19,47.826,42.107,0.427936,794.940710,1554.405451,220.663548,27.934888
+clean-3source,DAS + SNR,"-30.00 90.00 -150.00","-144.00 -31.00 85.00","1.00 5.00 6.00",4.000000,92,45.652,3,19,47.826,42.107,0.427936,794.940710,1554.405451,220.663548,27.934888
+clean-3source,DAS adaptativo,"-30.00 90.00 -150.00","-144.00 -31.00 85.00","1.00 5.00 6.00",4.000000,92,45.652,3,19,47.826,42.107,0.427936,794.940710,1554.405451,220.663548,27.934888

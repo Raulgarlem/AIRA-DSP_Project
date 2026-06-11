@@ -1,0 +1,8 @@
+Case: clean-2source
+Sample rate: 48000 Hz
+Samples: 1539072
+Duration: 32.064 s
+Iterations per source: 3
+Cancellation factor: 0.700
+Output gain: +6.0206 dB, with clipping prevention
+Estimated angles: -28.00 86.00

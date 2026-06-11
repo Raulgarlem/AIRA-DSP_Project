@@ -1,0 +1,6 @@
+corpus,caso,fuentes,angulos_reales,metodo,angulos_estimados,error_medio_grados,tiempo_localizacion_ms,preprocesamiento_ms
+corpus44100,clean-1source,1,"60.00",Pearson,"66.00",6.000000,2531.352997,97.651958
+corpus44100,clean-1source,1,"60.00",GCC,"66.00",6.000000,2298.078060,97.651958
+corpus44100,clean-1source,1,"60.00",SRP-PHAT,"118.00",58.000000,13133.430004,97.651958
+corpus44100,clean-1source,1,"60.00",Delay-and-Sum,"80.00",20.000000,26549.605846,97.651958
+corpus44100,clean-1source,1,"60.00",MUSIC,"158.00",98.000000,563.591957,97.651958

@@ -1,41 +1,78 @@
-# asumiendo que tenemos la siguiente estructura
-# .
-#   jack_in_to_out #algoritmo
-# ./baudline
-#   baudline_jack #ejecutable de baudline
-# ./aira
-#   corpus48000 # directorio de aira
-#   ReadMicWavs # ejectubal de ReadMicWavs
+#!/usr/bin/env bash
 
-# correr con:
-#   bash script.sh
+set -u
 
-#corremos algoritmo en el fondo (&)
-./build/jack_in_to_out &
-jackpid=$!
+if [[ $# -ne 3 ]]; then
+  echo "Uso: $0 CARPETA_GRABACIONES SOCKET_RESULTADOS NUMERO_FUENTES" >&2
+  exit 2
+fi
+
+case_directory=$1
+result_socket=$2
+source_count=$3
+script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+build_directory="${script_directory}/build"
+localizer_pid=
+reader_pid=
+
+cleanup() {
+  trap - EXIT INT TERM
+  if [[ -n "${reader_pid}" ]] && kill -0 "${reader_pid}" 2>/dev/null; then
+    kill "${reader_pid}" 2>/dev/null || true
+    wait "${reader_pid}" 2>/dev/null || true
+  fi
+  if [[ -n "${localizer_pid}" ]] && kill -0 "${localizer_pid}" 2>/dev/null; then
+    kill "${localizer_pid}" 2>/dev/null || true
+    wait "${localizer_pid}" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT INT TERM
+
+if [[ ! "${source_count}" =~ ^[1-4]$ ]]; then
+  echo "NUMERO_FUENTES debe estar entre 1 y 4." >&2
+  exit 2
+fi
+
+if ! jack_lsp >/dev/null 2>&1; then
+  echo "JACK no esta iniciado o no es accesible." >&2
+  exit 1
+fi
+
+for required_file in info.txt wav_mic1.wav wav_mic2.wav wav_mic3.wav; do
+  if [[ ! -f "${case_directory}/${required_file}" ]]; then
+    echo "Falta ${case_directory}/${required_file}" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -x "${build_directory}/jack_das_localizer" ]] ||
+   [[ ! -x "${build_directory}/ReadMicWavs" ]]; then
+  echo "Compile primero el proyecto en ${build_directory}." >&2
+  exit 1
+fi
+
+microphone_distance=$(head -n 1 "${case_directory}/info.txt" | tr -d '[:space:]')
+if [[ -z "${microphone_distance}" ]]; then
+  echo "No se pudo leer la distancia desde info.txt." >&2
+  exit 1
+fi
+
+"${build_directory}/jack_das_localizer" \
+  "${result_socket}" "${microphone_distance}" "${source_count}" &
+localizer_pid=$!
 sleep 1
 
-#lo desconectamos de los microfonos
-jack_disconnect system:capture_1 in_to_out:input_1
+if ! kill -0 "${localizer_pid}" 2>/dev/null; then
+  echo "El localizador DAS no pudo iniciar." >&2
+  wait "${localizer_pid}" || true
+  exit 1
+fi
 
-#corremos baudline en el fondo (&)
-./baudline/baudline_jack -jack -channels 2 -pause &
-baudlinepid=$!
-sleep 1
+"${build_directory}/ReadMicWavs" \
+  jack_das_localizer input_ "${case_directory}" 3 &
+reader_pid=$!
 
-#corremos ReadMicWavs en el fondo (&)
-./build/ReadMicWavs in_to_out input_ ../data/corpus48000/clean-3source 2 &
-rmwpid=$!
-sleep 1
-
-#conectamos la salide ReadMicWavs y baudline
-jack_connect ReadMicWavs:out_1 baudline:in_1
-
-
-#nos esperamos una cierta cantidad de tiempo para que todo funcione
-sleep 5
-
-#cerramos todo
-kill $jackpid
-kill $baudlinepid
-kill $rmwpid
+wait "${reader_pid}"
+reader_status=$?
+reader_pid=
+exit "${reader_status}"

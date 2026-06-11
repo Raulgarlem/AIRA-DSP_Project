@@ -1,0 +1,8 @@
+corpus,caso,fuentes,angulos_reales,metodo,angulos_estimados,error_medio_grados,tiempo_localizacion_ms,preprocesamiento_ms
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",Pearson,"-150.00 91.00 134.00",65.666667,590.927839,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",GCC,"-150.00 91.00 134.00",65.666667,245.258093,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",GCC-PHAT,"-43.00 0.00 40.00",71.000000,5832.775831,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",SRP-PHAT,"0.00 60.00 120.00",50.000000,422.972918,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",Delay-and-Sum,"-149.00 91.00 132.00",66.000000,724.826813,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",Delay-and-Sum Hierarchical,"-150.00 91.00 132.00",66.333333,500.683069,187.076092
+corpus48000,noisy-3source,3,"-30.00 90.00 -150.00",MUSIC,"N/A",NaN,NaN,187.076092

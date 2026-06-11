@@ -1,0 +1,11 @@
+Caso: clean-2source
+Frecuencia de muestreo: 48000 Hz
+Muestras: 1539072
+Duracion: 32.064000 s
+Ventana WOLA: 1024
+Salto WOLA: 512
+Angulos reales: -30.00 90.00
+Angulos estimados: -28.00 86.00
+Tiempo de separacion: 3.413474 s
+Fuente 1: -28.00 grados, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\clean-2source\source1.wav
+Fuente 2: 86.00 grados, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\clean-2source\source2.wav

@@ -1,0 +1,13 @@
+Caso: clean-2source
+Metodo: DAS con cancelacion sucesiva
+Factor de cancelacion: 0.7000
+Ganancia de salida: 6.0206 dB
+Frecuencia de muestreo: 48000 Hz
+Muestras: 1539072
+Duracion: 32.064000 s
+Angulos reales: -30.00 90.00
+Angulos estimados: -28.00 86.00
+Orden SIC: [1 2]
+Tiempo de separacion: 4.813034 s
+Fuente 1: -28.00 grados, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\das_sic\clean-2source\source1.wav
+Fuente 2: 86.00 grados, C:\Users\User\OneDrive\Documentos\GitHub\AIRA-DSP_Project\Octave\Separacion\full_results\das_sic\clean-2source\source2.wav

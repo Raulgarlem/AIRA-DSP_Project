@@ -1,0 +1,10 @@
+Caso: clean-2source
+Metodo: promedio coherente de tres DAS
+Offsets angulares: [-2 0 2]
+Angulos reales: -30.00 90.00
+Angulos estimados: -28.00 86.00
+Muestras: 1539072
+Duracion: 32.064000 s
+SI-SDR DAS central: -16.6928 -20.5320
+SI-SDR suma: -16.6912 -20.5280
+Tiempo de separacion: 7.942933 s

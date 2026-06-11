@@ -1,0 +1,16 @@
+Caso: clean-2source
+Metodo: DAS WOLA con mascara tiempo-frecuencia suave
+Ventana/salto: 1024/512
+Suavizado temporal de potencia: 0.650
+Exponente de mascara: 1.500
+Piso de mascara: 0.050
+Ganancia de salida: 6.0206 dB
+Muestras: 1539072
+Duracion: 32.064000 s
+Angulos reales: -30.00 90.00
+Angulos estimados: -28.00 86.00
+Mascara media: 0.5067 0.5433
+Mascara dominante media: 0.6523
+SI-SDR DAS: -16.6913 -20.5348
+SI-SDR mascara: -16.6515 -18.9988
+Tiempo de separacion: 9.375544 s
