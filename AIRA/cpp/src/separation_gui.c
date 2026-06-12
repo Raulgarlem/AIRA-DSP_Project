@@ -1,24 +1,30 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <gtk/gtk.h>
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
-#define MAX_TRUE_ANGLES 16
+#define MAX_SOURCES 3
 
 typedef struct {
     GtkWidget *window;
-    GtkWidget *online_radio;
-    GtkWidget *known_doa_radio;
-    GtkWidget *localization_combo;
-    GtkWidget *separation_combo;
     GtkWidget *folder_chooser;
+    GtkWidget *method_combo;
     GtkWidget *play_button;
     GtkWidget *stop_button;
+    GtkWidget *source_radios[MAX_SOURCES];
     GtkWidget *status_label;
     GtkWidget *distance_label;
     GtkWidget *doa_label;
     GtkWidget *configuration_label;
+    GSubprocess *script_process;
+    char *aira_directory;
+    int source_count;
+    int switching_source;
 } app_state_t;
 
 static void set_label_value(
@@ -45,6 +51,33 @@ static void show_error(app_state_t *state, const char *message)
     gtk_widget_destroy(dialog);
 }
 
+static char *find_aira_directory(void)
+{
+    char executable_path[4096];
+    ssize_t length = readlink(
+        "/proc/self/exe", executable_path, sizeof(executable_path) - 1);
+
+    if (length > 0) {
+        char *executable_directory;
+        char *candidate;
+        char *script_path;
+
+        executable_path[length] = '\0';
+        executable_directory = g_path_get_dirname(executable_path);
+        candidate = g_path_get_dirname(executable_directory);
+        script_path = g_build_filename(
+            candidate, "StartSeparationScript.sh", NULL);
+        g_free(executable_directory);
+        if (g_file_test(script_path, G_FILE_TEST_IS_REGULAR)) {
+            g_free(script_path);
+            return candidate;
+        }
+        g_free(script_path);
+        g_free(candidate);
+    }
+    return g_get_current_dir();
+}
+
 static int validate_wav_files(const char *folder, char **error_message)
 {
     int microphone;
@@ -68,7 +101,7 @@ static int validate_wav_files(const char *folder, char **error_message)
 static int parse_case_info(
     const char *folder,
     double *distance,
-    int angles[MAX_TRUE_ANGLES],
+    int angles[MAX_SOURCES],
     int *angle_count,
     char **error_message)
 {
@@ -108,8 +141,16 @@ static int parse_case_info(
             }
             value = strtol(tokens[token_id], &end, 10);
             if (end != tokens[token_id] &&
-                value >= -180 && value <= 180 &&
-                count < MAX_TRUE_ANGLES) {
+                value >= -180 && value <= 180) {
+                if (count >= MAX_SOURCES) {
+                    *error_message = g_strdup(
+                        "La separacion en linea admite hasta tres fuentes.");
+                    g_strfreev(tokens);
+                    g_strfreev(lines);
+                    g_free(contents);
+                    g_free(info_path);
+                    return 0;
+                }
                 angles[count++] = value == -180 ? 180 : (int)value;
             }
         }
@@ -119,42 +160,139 @@ static int parse_case_info(
     g_free(contents);
     g_free(info_path);
 
-    if (count < 1 || count > 4) {
+    if (count < 1) {
         *error_message = g_strdup(
-            "info.txt debe contener entre uno y cuatro angulos.");
+            "info.txt debe contener al menos un angulo.");
         return 0;
     }
     *angle_count = count;
     return 1;
 }
 
-static const char *localization_label(const char *method)
+static void set_session_controls(app_state_t *state, gboolean running)
 {
-    return strcmp(method, "srp-phat") == 0
-        ? "SRP-PHAT"
-        : "DAS adaptativo";
+    int source;
+
+    gtk_widget_set_sensitive(state->play_button, !running);
+    gtk_widget_set_sensitive(state->stop_button, running);
+    gtk_widget_set_sensitive(state->folder_chooser, !running);
+    gtk_widget_set_sensitive(state->method_combo, !running);
+    for (source = 0; source < MAX_SOURCES; ++source) {
+        gtk_widget_set_sensitive(
+            state->source_radios[source],
+            running && source < state->source_count);
+    }
 }
 
-static const char *separation_label(const char *method)
+static void stop_session(app_state_t *state)
 {
-    if (strcmp(method, "lcmv") == 0) {
-        return "LCMV";
+    if (state->script_process != NULL) {
+        g_subprocess_send_signal(state->script_process, SIGTERM);
+        g_clear_object(&state->script_process);
     }
-    if (strcmp(method, "gsc") == 0) {
-        return "GSC";
-    }
-    return "Beamforming DAS";
+    state->source_count = 0;
+    set_session_controls(state, FALSE);
 }
 
-static void on_mode_toggled(GtkToggleButton *button, gpointer user_data)
+static void on_script_finished(
+    GObject *source_object,
+    GAsyncResult *result,
+    gpointer user_data)
 {
     app_state_t *state = user_data;
-    gboolean online;
-    (void)button;
+    GSubprocess *process = G_SUBPROCESS(source_object);
+    GError *error = NULL;
+    gboolean completed;
 
-    online = gtk_toggle_button_get_active(
-        GTK_TOGGLE_BUTTON(state->online_radio));
-    gtk_widget_set_sensitive(state->localization_combo, online);
+    if (state->script_process != process) {
+        return;
+    }
+    completed = g_subprocess_wait_finish(process, result, &error);
+    if (!completed || g_subprocess_get_exit_status(process) != 0) {
+        gtk_label_set_text(
+            GTK_LABEL(state->status_label),
+            error != NULL
+                ? error->message
+                : "La separacion termino con un error.");
+    } else {
+        gtk_label_set_text(
+            GTK_LABEL(state->status_label),
+            "Reproduccion terminada.");
+    }
+    g_clear_error(&error);
+    g_clear_object(&state->script_process);
+    state->source_count = 0;
+    set_session_controls(state, FALSE);
+}
+
+static void on_source_toggled(
+    GtkToggleButton *button,
+    gpointer user_data)
+{
+    app_state_t *state = user_data;
+    char source_text[8];
+    char *script_path;
+    char *standard_error = NULL;
+    GError *error = NULL;
+    int source;
+
+    if (!gtk_toggle_button_get_active(button) ||
+        state->script_process == NULL ||
+        state->switching_source) {
+        return;
+    }
+    for (source = 0; source < state->source_count; ++source) {
+        if (GTK_WIDGET(button) == state->source_radios[source]) {
+            break;
+        }
+    }
+    if (source >= state->source_count) {
+        return;
+    }
+
+    state->switching_source = 1;
+    snprintf(source_text, sizeof(source_text), "%d", source + 1);
+    script_path = g_build_filename(
+        state->aira_directory, "SwitchSeparationSource.sh", NULL);
+    {
+        char *arguments[] = {
+            (char *)"bash",
+            script_path,
+            source_text,
+            NULL
+        };
+        if (!g_spawn_sync(
+                state->aira_directory,
+                arguments,
+                NULL,
+                G_SPAWN_SEARCH_PATH,
+                NULL,
+                NULL,
+                NULL,
+                &standard_error,
+                NULL,
+                &error)) {
+            show_error(
+                state,
+                error != NULL
+                    ? error->message
+                    : "No se pudo cambiar la fuente.");
+        } else if (standard_error != NULL && standard_error[0] != '\0') {
+            show_error(state, standard_error);
+        } else {
+            char status[64];
+            snprintf(
+                status,
+                sizeof(status),
+                "Escuchando fuente %d.",
+                source + 1);
+            gtk_label_set_text(GTK_LABEL(state->status_label), status);
+        }
+    }
+    g_clear_error(&error);
+    g_free(standard_error);
+    g_free(script_path);
+    state->switching_source = 0;
 }
 
 static void on_play_clicked(GtkButton *button, gpointer user_data)
@@ -163,26 +301,28 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
     char *folder = gtk_file_chooser_get_filename(
         GTK_FILE_CHOOSER(state->folder_chooser));
     char *error_message = NULL;
-    const char *separation_method;
-    const char *localization_method;
     double distance;
-    int angles[MAX_TRUE_ANGLES];
+    int angles[MAX_SOURCES];
     int angle_count;
-    int angle;
+    const char *method;
     char distance_text[64];
     char doa_text[128] = {0};
-    char configuration_text[256];
-    gboolean online;
+    char angle_text[MAX_SOURCES][16];
+    char *script_path;
+    char *arguments[4 + MAX_SOURCES];
+    GSubprocessLauncher *launcher;
+    GError *error = NULL;
+    int angle;
     (void)button;
 
     if (folder == NULL) {
         show_error(state, "Seleccione primero una carpeta.");
         return;
     }
-    separation_method = gtk_combo_box_get_active_id(
-        GTK_COMBO_BOX(state->separation_combo));
-    if (separation_method == NULL) {
-        show_error(state, "Seleccione un metodo de separacion.");
+    method = gtk_combo_box_get_active_id(
+        GTK_COMBO_BOX(state->method_combo));
+    if (method == NULL) {
+        show_error(state, "Seleccione DAS o LCMV.");
         g_free(folder);
         return;
     }
@@ -208,44 +348,57 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
             "%s%d",
             angle == 0 ? "" : " ",
             angles[angle]);
+        snprintf(
+            angle_text[angle],
+            sizeof(angle_text[angle]),
+            "%d",
+            angles[angle]);
     }
 
-    online = gtk_toggle_button_get_active(
-        GTK_TOGGLE_BUTTON(state->online_radio));
-    localization_method = gtk_combo_box_get_active_id(
-        GTK_COMBO_BOX(state->localization_combo));
-    if (online && localization_method == NULL) {
-        show_error(state, "Seleccione un metodo de localizacion.");
-        g_free(folder);
+    script_path = g_build_filename(
+        state->aira_directory, "StartSeparationScript.sh", NULL);
+    arguments[0] = (char *)"bash";
+    arguments[1] = script_path;
+    arguments[2] = folder;
+    arguments[3] = (char *)method;
+    for (angle = 0; angle < angle_count; ++angle) {
+        arguments[4 + angle] = angle_text[angle];
+    }
+    arguments[4 + angle_count] = NULL;
+
+    launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
+    g_subprocess_launcher_set_cwd(launcher, state->aira_directory);
+    state->script_process = g_subprocess_launcher_spawnv(
+        launcher,
+        (const gchar *const *)arguments,
+        &error);
+    g_object_unref(launcher);
+    g_free(script_path);
+    g_free(folder);
+
+    if (state->script_process == NULL) {
+        show_error(state, error->message);
+        g_clear_error(&error);
         return;
     }
 
-    if (online) {
-        snprintf(
-            configuration_text,
-            sizeof(configuration_text),
-            "En linea: %s + %s",
-            localization_label(localization_method),
-            separation_label(separation_method));
-    } else {
-        snprintf(
-            configuration_text,
-            sizeof(configuration_text),
-            "DOA conocidos + %s",
-            separation_label(separation_method));
-    }
-
+    state->source_count = angle_count;
+    gtk_toggle_button_set_active(
+        GTK_TOGGLE_BUTTON(state->source_radios[0]), TRUE);
     set_label_value(state->distance_label, "Distancia:", distance_text);
-    set_label_value(state->doa_label, "DOA del caso:", doa_text);
+    set_label_value(state->doa_label, "DOA reales:", doa_text);
     set_label_value(
         state->configuration_label,
         "Configuracion:",
-        configuration_text);
+        strcmp(method, "lcmv") == 0
+            ? "DOA conocidos + LCMV WOLA en linea"
+            : "DOA conocidos + DAS WOLA en linea");
     gtk_label_set_text(
         GTK_LABEL(state->status_label),
-        "Configuracion valida. La separacion aun no esta implementada.");
-    gtk_widget_set_sensitive(state->stop_button, TRUE);
-    g_free(folder);
+        "Procesando. Escuchando fuente 1.");
+    set_session_controls(state, TRUE);
+    g_subprocess_wait_async(
+        state->script_process, NULL, on_script_finished, state);
 }
 
 static void on_stop_clicked(GtkButton *button, gpointer user_data)
@@ -253,17 +406,17 @@ static void on_stop_clicked(GtkButton *button, gpointer user_data)
     app_state_t *state = user_data;
     (void)button;
 
-    set_label_value(state->distance_label, "Distancia:", "-");
-    set_label_value(state->doa_label, "DOA del caso:", "-");
-    set_label_value(state->configuration_label, "Configuracion:", "-");
+    stop_session(state);
     gtk_label_set_text(GTK_LABEL(state->status_label), "Detenido.");
-    gtk_widget_set_sensitive(state->stop_button, FALSE);
 }
 
 static void on_window_destroy(GtkWidget *widget, gpointer user_data)
 {
+    app_state_t *state = user_data;
     (void)widget;
-    (void)user_data;
+
+    stop_session(state);
+    g_free(state->aira_directory);
     gtk_main_quit();
 }
 
@@ -272,15 +425,16 @@ int main(int argc, char **argv)
     app_state_t state = {0};
     GtkWidget *grid;
     GtkWidget *title;
-    GtkWidget *mode_title;
-    GtkWidget *localization_title;
-    GtkWidget *separation_title;
+    GtkWidget *method_title;
+    GtkWidget *source_title;
+    int source;
 
     gtk_init(&argc, &argv);
+    state.aira_directory = find_aira_directory();
 
     state.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(state.window), "Separacion AIRA");
-    gtk_window_set_default_size(GTK_WINDOW(state.window), 760, 560);
+    gtk_window_set_default_size(GTK_WINDOW(state.window), 760, 500);
     gtk_container_set_border_width(GTK_CONTAINER(state.window), 20);
     g_signal_connect(
         state.window, "destroy", G_CALLBACK(on_window_destroy), &state);
@@ -293,83 +447,70 @@ int main(int argc, char **argv)
     title = gtk_label_new(NULL);
     gtk_label_set_markup(
         GTK_LABEL(title),
-        "<span size=\"x-large\"><b>Separacion de fuentes</b></span>");
+        "<span size=\"x-large\"><b>Separacion en linea</b></span>");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), title, 0, 0, 3, 1);
 
-    mode_title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(mode_title), "<b>Modo de operacion</b>");
-    gtk_widget_set_halign(mode_title, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), mode_title, 0, 1, 3, 1);
-
-    state.online_radio = gtk_radio_button_new_with_label(NULL, "En linea");
-    state.known_doa_radio = gtk_radio_button_new_with_label_from_widget(
-        GTK_RADIO_BUTTON(state.online_radio),
-        "Con DOA conocidos");
-    gtk_toggle_button_set_active(
-        GTK_TOGGLE_BUTTON(state.online_radio), TRUE);
-    g_signal_connect(
-        state.online_radio,
-        "toggled",
-        G_CALLBACK(on_mode_toggled),
-        &state);
-    g_signal_connect(
-        state.known_doa_radio,
-        "toggled",
-        G_CALLBACK(on_mode_toggled),
-        &state);
-    gtk_grid_attach(GTK_GRID(grid), state.online_radio, 0, 2, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.known_doa_radio, 1, 2, 1, 1);
-
-    localization_title = gtk_label_new(NULL);
+    method_title = gtk_label_new(NULL);
     gtk_label_set_markup(
-        GTK_LABEL(localization_title),
-        "<b>Localizacion para modo en linea</b>");
-    gtk_widget_set_halign(localization_title, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), localization_title, 0, 3, 3, 1);
+        GTK_LABEL(method_title),
+        "<b>Metodo de separacion con DOA reales</b>");
+    gtk_widget_set_halign(method_title, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), method_title, 0, 1, 3, 1);
 
-    state.localization_combo = gtk_combo_box_text_new();
+    state.method_combo = gtk_combo_box_text_new();
     gtk_combo_box_text_append(
-        GTK_COMBO_BOX_TEXT(state.localization_combo),
-        "adaptive",
-        "DAS adaptativo");
-    gtk_combo_box_text_append(
-        GTK_COMBO_BOX_TEXT(state.localization_combo),
-        "srp-phat",
-        "SRP-PHAT");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state.localization_combo), 0);
-    gtk_widget_set_hexpand(state.localization_combo, TRUE);
-    gtk_grid_attach(GTK_GRID(grid), state.localization_combo, 0, 4, 3, 1);
-
-    separation_title = gtk_label_new(NULL);
-    gtk_label_set_markup(
-        GTK_LABEL(separation_title),
-        "<b>Metodo de separacion</b>");
-    gtk_widget_set_halign(separation_title, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), separation_title, 0, 5, 3, 1);
-
-    state.separation_combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(
-        GTK_COMBO_BOX_TEXT(state.separation_combo),
+        GTK_COMBO_BOX_TEXT(state.method_combo),
         "das",
-        "Beamforming DAS");
+        "DAS WOLA");
     gtk_combo_box_text_append(
-        GTK_COMBO_BOX_TEXT(state.separation_combo),
+        GTK_COMBO_BOX_TEXT(state.method_combo),
         "lcmv",
-        "LCMV");
-    gtk_combo_box_text_append(
-        GTK_COMBO_BOX_TEXT(state.separation_combo),
-        "gsc",
-        "GSC");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state.separation_combo), 0);
-    gtk_widget_set_hexpand(state.separation_combo, TRUE);
-    gtk_grid_attach(GTK_GRID(grid), state.separation_combo, 0, 6, 3, 1);
+        "LCMV WOLA");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.method_combo), 0);
+    gtk_widget_set_hexpand(state.method_combo, TRUE);
+    gtk_grid_attach(
+        GTK_GRID(grid), state.method_combo, 0, 2, 3, 1);
 
     state.folder_chooser = gtk_file_chooser_button_new(
         "Seleccione la carpeta de grabaciones",
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
     gtk_widget_set_hexpand(state.folder_chooser, TRUE);
-    gtk_grid_attach(GTK_GRID(grid), state.folder_chooser, 0, 7, 3, 1);
+    gtk_grid_attach(
+        GTK_GRID(grid), state.folder_chooser, 0, 3, 3, 1);
+
+    source_title = gtk_label_new(NULL);
+    gtk_label_set_markup(
+        GTK_LABEL(source_title),
+        "<b>Fuente monitorizada</b>");
+    gtk_widget_set_halign(source_title, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), source_title, 0, 4, 3, 1);
+
+    state.source_radios[0] = gtk_radio_button_new_with_label(
+        NULL, "Source 1");
+    for (source = 1; source < MAX_SOURCES; ++source) {
+        char label[32];
+        snprintf(label, sizeof(label), "Source %d", source + 1);
+        state.source_radios[source] =
+            gtk_radio_button_new_with_label_from_widget(
+                GTK_RADIO_BUTTON(state.source_radios[0]),
+                label);
+    }
+    for (source = 0; source < MAX_SOURCES; ++source) {
+        gtk_widget_set_sensitive(state.source_radios[source], FALSE);
+        g_signal_connect(
+            state.source_radios[source],
+            "toggled",
+            G_CALLBACK(on_source_toggled),
+            &state);
+        gtk_grid_attach(
+            GTK_GRID(grid),
+            state.source_radios[source],
+            source,
+            5,
+            1,
+            1);
+    }
 
     state.play_button = gtk_button_new_with_label("Play");
     state.stop_button = gtk_button_new_with_label("Stop");
@@ -378,8 +519,8 @@ int main(int argc, char **argv)
         state.play_button, "clicked", G_CALLBACK(on_play_clicked), &state);
     g_signal_connect(
         state.stop_button, "clicked", G_CALLBACK(on_stop_clicked), &state);
-    gtk_grid_attach(GTK_GRID(grid), state.play_button, 0, 8, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.stop_button, 1, 8, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.play_button, 0, 6, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.stop_button, 1, 6, 1, 1);
 
     state.status_label = gtk_label_new("Listo.");
     state.distance_label = gtk_label_new(NULL);
@@ -390,13 +531,13 @@ int main(int argc, char **argv)
     gtk_widget_set_halign(state.doa_label, GTK_ALIGN_START);
     gtk_widget_set_halign(state.configuration_label, GTK_ALIGN_START);
     set_label_value(state.distance_label, "Distancia:", "-");
-    set_label_value(state.doa_label, "DOA del caso:", "-");
+    set_label_value(state.doa_label, "DOA reales:", "-");
     set_label_value(state.configuration_label, "Configuracion:", "-");
-    gtk_grid_attach(GTK_GRID(grid), state.status_label, 0, 9, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.distance_label, 0, 10, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.doa_label, 0, 11, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.status_label, 0, 7, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.distance_label, 0, 8, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.doa_label, 0, 9, 3, 1);
     gtk_grid_attach(
-        GTK_GRID(grid), state.configuration_label, 0, 12, 3, 1);
+        GTK_GRID(grid), state.configuration_label, 0, 10, 3, 1);
 
     gtk_widget_show_all(state.window);
     gtk_main();

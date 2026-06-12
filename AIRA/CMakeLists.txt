@@ -116,6 +116,31 @@ target_link_libraries(
     Threads::Threads
 )
 
+add_executable(
+    jack_das_separator
+    cpp/src/jack_das_separator.cpp
+)
+
+target_compile_options(
+    jack_das_separator
+    PRIVATE
+    ${JACK_CFLAGS_OTHER}
+    ${FFTW3_CFLAGS_OTHER}
+)
+
+target_include_directories(
+    jack_das_separator
+    PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen3
+)
+
+target_link_libraries(
+    jack_das_separator
+    ${JACK_LIBRARIES}
+    ${FFTW3_LIBRARIES}
+    m
+)
+
 # =========================
 # Interfaz GTK3
 # =========================

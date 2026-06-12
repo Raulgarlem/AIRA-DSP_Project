@@ -35,7 +35,8 @@ typedef struct {
 das_localizer_t *das_localizer_create(
     unsigned int sample_rate,
     double microphone_distance_m,
-    int source_count,
+    int max_sources,
+    double relative_peak_threshold,
     das_method_t method);
 
 void das_localizer_destroy(das_localizer_t *localizer);

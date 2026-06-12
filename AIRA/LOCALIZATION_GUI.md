@@ -48,7 +48,21 @@ Antes de pulsar `Play`, seleccione uno de los metodos:
 
 Al pulsar `Play`, la interfaz ejecuta `StartProjectScript.sh`. El script
 inicia `jack_das_localizer`, inicia `ReadMicWavs` y conecta sus tres salidas
-con las tres entradas del localizador.
+con las tres entradas del localizador. Tambien conecta
+`ReadMicWavs:out_1` con `system:playback_1` y `system:playback_2` para
+escuchar el primer canal por ambos lados mientras avanza la localizacion.
+
+El localizador estima automaticamente la cantidad de fuentes. Busca hasta
+cuatro maximos locales separados al menos 20 grados y conserva los que
+alcanzan al menos `0.55` veces el maximo del espectro espacial. La interfaz
+muestra tanto la cantidad detectada como sus angulos.
+
+Una direccion se considera fuente valida despues de aparecer estable en
+tres momentos separados al menos 0.5 segundos. Cada momento requiere tres
+estimaciones consecutivas dentro de 5 grados. Las observaciones de una
+direccion se agrupan con una tolerancia de 20 grados y se conservan durante
+todo el audio. Una vez confirmada, la fuente y su angulo permanecen en el
+resultado aunque deje de detectarse posteriormente.
 
 La primera estimacion aparece en la ventana 15, despues de 12 ventanas de
 calentamiento. A partir de ese momento, la interfaz actualiza el resultado

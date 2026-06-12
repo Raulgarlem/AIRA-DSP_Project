@@ -191,10 +191,12 @@ static gboolean poll_results(gpointer user_data)
         int measurements;
         int variation;
         int consecutive;
+        int detected_sources;
         double stable_time;
         char method[16];
         char mode[16];
         char angles[128];
+        char detected_sources_text[160];
         char window_text[128];
         char method_text[64];
         char stability_text[128];
@@ -203,7 +205,7 @@ static gboolean poll_results(gpointer user_data)
                 latest,
                 "RESULT frame=%llu start=%lf end=%lf method=%15s mode=%15s "
                 "stable=%d measurements=%d variation=%d consecutive=%d "
-                "stable_time=%lf angles=%127s",
+                "stable_time=%lf sources=%d angles=%127s",
                 &frame,
                 &start,
                 &end,
@@ -214,7 +216,8 @@ static gboolean poll_results(gpointer user_data)
                 &variation,
                 &consecutive,
                 &stable_time,
-                angles) == 11) {
+                &detected_sources,
+                angles) == 12) {
             char *cursor;
             (void)frame;
             for (cursor = angles; *cursor != '\0'; ++cursor) {
@@ -228,6 +231,13 @@ static gboolean poll_results(gpointer user_data)
                 "%.3f - %.3f s",
                 start,
                 end);
+            snprintf(
+                detected_sources_text,
+                sizeof(detected_sources_text),
+                "%d fuente%s: %s",
+                detected_sources,
+                detected_sources == 1 ? "" : "s",
+                angles);
             if (strcmp(method, "srp-phat") == 0) {
                 snprintf(method_text, sizeof(method_text), "SRP-PHAT");
             } else {
@@ -272,7 +282,7 @@ static gboolean poll_results(gpointer user_data)
             set_label_value(
                 state->calculated_angles_label,
                 "Angulos calculados:",
-                angles);
+                detected_sources_text);
             set_label_value(
                 state->mode_label,
                 "Metodo activo:",
@@ -375,7 +385,8 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
     int angle_count;
     char distance_text[64];
     char true_angles_text[128] = {0};
-    char source_count_text[16];
+    const char *max_sources_text = "4";
+    const char *relative_peak_threshold_text = "0.55";
     const char *method;
     char *script_path;
     char *aira_directory;
@@ -423,7 +434,6 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
             angle == 0 ? "" : " ",
             true_angles[angle]);
     }
-    snprintf(source_count_text, sizeof(source_count_text), "%d", angle_count);
     set_label_value(state->distance_label, "Distancia:", distance_text);
     set_label_value(
         state->true_angles_label,
@@ -446,7 +456,8 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
         script_path,
         folder,
         state->socket_path,
-        source_count_text,
+        max_sources_text,
+        relative_peak_threshold_text,
         method,
         NULL);
     g_object_unref(launcher);

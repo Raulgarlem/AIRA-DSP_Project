@@ -81,7 +81,7 @@ static void send_result(const das_result_t *result)
         sizeof(message),
         "RESULT frame=%llu start=%.6f end=%.6f method=%s mode=%s "
         "stable=%d measurements=%d variation=%d consecutive=%d "
-        "stable_time=%.6f angles=",
+        "stable_time=%.6f sources=%d angles=",
         result->frame_index,
         result->start_time_s,
         result->end_time_s,
@@ -93,7 +93,8 @@ static void send_result(const das_result_t *result)
         result->stability_measurements,
         result->stability_ready ? result->maximum_variation_deg : -1,
         result->consecutive_stable_states,
-        result->first_stable_time_s);
+        result->first_stable_time_s,
+        result->source_count);
     for (source = 0; source < result->source_count && offset > 0 &&
                      (size_t)offset < sizeof(message);
          ++source) {
@@ -103,6 +104,13 @@ static void send_result(const das_result_t *result)
             "%s%d",
             source == 0 ? "" : ",",
             result->angles_deg[source]);
+    }
+    if (result->source_count == 0 && offset > 0 &&
+        (size_t)offset < sizeof(message)) {
+        offset += snprintf(
+            message + offset,
+            sizeof(message) - (size_t)offset,
+            "-");
     }
     if (offset > 0) {
         sendto(
@@ -159,7 +167,9 @@ static void usage(const char *program)
 {
     fprintf(
         stderr,
-        "Uso: %s SOCKET DISTANCIA_MICROFONOS NUMERO_FUENTES METODO\n"
+        "Uso: %s SOCKET DISTANCIA_MICROFONOS MAX_FUENTES UMBRAL_RELATIVO "
+        "METODO\n"
+        "UMBRAL_RELATIVO: valor en (0, 1], por ejemplo 0.6\n"
         "METODO: adaptive | srp-phat\n",
         program);
 }
@@ -168,19 +178,21 @@ int main(int argc, char **argv)
 {
     jack_status_t status;
     double microphone_distance;
-    int source_count;
+    int max_sources;
+    double relative_peak_threshold;
     das_method_t method;
     int microphone;
 
-    if (argc != 5) {
+    if (argc != 6) {
         usage(argv[0]);
         return 1;
     }
     microphone_distance = strtod(argv[2], NULL);
-    source_count = atoi(argv[3]);
-    if (strcmp(argv[4], "adaptive") == 0) {
+    max_sources = atoi(argv[3]);
+    relative_peak_threshold = strtod(argv[4], NULL);
+    if (strcmp(argv[5], "adaptive") == 0) {
         method = DAS_METHOD_ADAPTIVE;
-    } else if (strcmp(argv[4], "srp-phat") == 0) {
+    } else if (strcmp(argv[5], "srp-phat") == 0) {
         method = DAS_METHOD_SRP_PHAT;
     } else {
         usage(argv[0]);
@@ -220,7 +232,8 @@ int main(int argc, char **argv)
     localizer = das_localizer_create(
         jack_get_sample_rate(client),
         microphone_distance,
-        source_count,
+        max_sources,
+        relative_peak_threshold,
         method);
     if (localizer == NULL) {
         fprintf(stderr, "No se pudo inicializar el localizador DAS.\n");
@@ -269,10 +282,12 @@ int main(int argc, char **argv)
     }
 
     printf(
-        "Localizador %s activo: 3 entradas, distancia %.3f m, %d fuentes.\n",
+        "Localizador %s activo: 3 entradas, distancia %.3f m, "
+        "hasta %d fuentes, umbral relativo %.3f.\n",
         method == DAS_METHOD_SRP_PHAT ? "SRP-PHAT" : "DAS adaptativo",
         microphone_distance,
-        source_count);
+        max_sources,
+        relative_peak_threshold);
     while (atomic_load_explicit(&running, memory_order_acquire)) {
         sleep(1);
     }
