@@ -135,3 +135,19 @@ target_link_libraries(
     localization_gui
     ${GTK3_LIBRARIES}
 )
+
+add_executable(
+    separation_gui
+    cpp/src/separation_gui.c
+)
+
+target_compile_options(
+    separation_gui
+    PRIVATE
+    ${GTK3_CFLAGS_OTHER}
+)
+
+target_link_libraries(
+    separation_gui
+    ${GTK3_LIBRARIES}
+)

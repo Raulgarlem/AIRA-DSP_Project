@@ -1,7 +1,7 @@
-# Interfaz de localizacion DAS
+# Interfaz de localizacion
 
-La interfaz ejecuta la localizacion DAS adaptativa sobre los tres archivos
-`wav_micX.wav` de una carpeta y los envia al localizador mediante JACK.
+La interfaz localiza fuentes sobre los tres archivos `wav_micX.wav` de una
+carpeta y los envia al localizador mediante JACK.
 
 ## Dependencias en Linux
 
@@ -40,10 +40,33 @@ wav_mic2.wav
 wav_mic3.wav
 ```
 
+Antes de pulsar `Play`, seleccione uno de los metodos:
+
+- `DAS adaptativo`: compara DAS base con DAS ponderado por SNR.
+- `SRP-PHAT`: acumula el espectro cruzado PHAT de los tres pares de
+  microfonos y evalua la potencia dirigida para cada angulo.
+
 Al pulsar `Play`, la interfaz ejecuta `StartProjectScript.sh`. El script
 inicia `jack_das_localizer`, inicia `ReadMicWavs` y conecta sus tres salidas
 con las tres entradas del localizador.
 
-La interfaz conserva solamente el resultado mas reciente. Cada nueva
-ventana sustituye los angulos calculados, el intervalo, el modo y la
-confianza mostrados anteriormente.
+La primera estimacion aparece en la ventana 15, despues de 12 ventanas de
+calentamiento. A partir de ese momento, la interfaz actualiza el resultado
+cada 3 ventanas usando el promedio acumulado de todos los espectros desde
+el inicio.
+
+El calculo interno conserva el intervalo angular `[-180, 179]`. En el
+resultado final, `-180` se representa como `180` por ser la misma direccion.
+
+La confianza espacial se usa internamente para seleccionar entre DAS base
+y DAS con mascara SNR, pero no se transmite ni se muestra en la interfaz.
+
+La estabilidad se evalua sobre las ultimas cuatro estimaciones emitidas.
+Se muestra `Estable` cuando la variacion angular circular maxima entre los
+conjuntos de direcciones no supera 5 grados. Antes de reunir cuatro
+mediciones se muestra el progreso del historial y `0/10` estados estables.
+Despues se muestra explicitamente la confirmacion de `1/50` a `50/50`.
+Cuando el metodo alcanza estabilidad durante 50 estados consecutivos, la
+interfaz conserva y muestra el tiempo de audio transcurrido hasta
+confirmarla. Un estado inestable reinicia el contador antes de la
+confirmacion; una vez confirmada, el tiempo no cambia.

@@ -79,12 +79,21 @@ static void send_result(const das_result_t *result)
     offset = snprintf(
         message,
         sizeof(message),
-        "RESULT frame=%llu start=%.6f end=%.6f mode=%s confidence=%.6f angles=",
+        "RESULT frame=%llu start=%.6f end=%.6f method=%s mode=%s "
+        "stable=%d measurements=%d variation=%d consecutive=%d "
+        "stable_time=%.6f angles=",
         result->frame_index,
         result->start_time_s,
         result->end_time_s,
-        result->use_snr_mask ? "snr" : "base",
-        result->confidence);
+        result->method == DAS_METHOD_SRP_PHAT ? "srp-phat" : "adaptive",
+        result->method == DAS_METHOD_SRP_PHAT
+            ? "srp-phat"
+            : (result->use_snr_mask ? "snr" : "base"),
+        result->stability_ready ? result->stable : -1,
+        result->stability_measurements,
+        result->stability_ready ? result->maximum_variation_deg : -1,
+        result->consecutive_stable_states,
+        result->first_stable_time_s);
     for (source = 0; source < result->source_count && offset > 0 &&
                      (size_t)offset < sizeof(message);
          ++source) {
@@ -150,7 +159,8 @@ static void usage(const char *program)
 {
     fprintf(
         stderr,
-        "Uso: %s SOCKET DISTANCIA_MICROFONOS NUMERO_FUENTES\n",
+        "Uso: %s SOCKET DISTANCIA_MICROFONOS NUMERO_FUENTES METODO\n"
+        "METODO: adaptive | srp-phat\n",
         program);
 }
 
@@ -159,14 +169,23 @@ int main(int argc, char **argv)
     jack_status_t status;
     double microphone_distance;
     int source_count;
+    das_method_t method;
     int microphone;
 
-    if (argc != 4) {
+    if (argc != 5) {
         usage(argv[0]);
         return 1;
     }
     microphone_distance = strtod(argv[2], NULL);
     source_count = atoi(argv[3]);
+    if (strcmp(argv[4], "adaptive") == 0) {
+        method = DAS_METHOD_ADAPTIVE;
+    } else if (strcmp(argv[4], "srp-phat") == 0) {
+        method = DAS_METHOD_SRP_PHAT;
+    } else {
+        usage(argv[0]);
+        return 1;
+    }
 
     memset(&result_address, 0, sizeof(result_address));
     result_address.sun_family = AF_UNIX;
@@ -199,7 +218,10 @@ int main(int argc, char **argv)
     }
 
     localizer = das_localizer_create(
-        jack_get_sample_rate(client), microphone_distance, source_count);
+        jack_get_sample_rate(client),
+        microphone_distance,
+        source_count,
+        method);
     if (localizer == NULL) {
         fprintf(stderr, "No se pudo inicializar el localizador DAS.\n");
         jack_client_close(client);
@@ -247,7 +269,8 @@ int main(int argc, char **argv)
     }
 
     printf(
-        "Localizador DAS activo: 3 entradas, distancia %.3f m, %d fuentes.\n",
+        "Localizador %s activo: 3 entradas, distancia %.3f m, %d fuentes.\n",
+        method == DAS_METHOD_SRP_PHAT ? "SRP-PHAT" : "DAS adaptativo",
         microphone_distance,
         source_count);
     while (atomic_load_explicit(&running, memory_order_acquire)) {

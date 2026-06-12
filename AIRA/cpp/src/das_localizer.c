@@ -9,15 +9,21 @@
 #define DAS_SOUND_SPEED 343.0
 #define DAS_MIN_FREQUENCY_HZ 300.0
 #define DAS_MAX_FREQUENCY_HZ 4000.0
+#define SRP_PHAT_MAX_FREQUENCY_HZ 5000.0
 #define DAS_MIN_PEAK_SEPARATION_DEG 20
 #define DAS_NOISE_HISTORY 30
 #define DAS_DECISION_INTERVAL 3
 #define DAS_DECISION_WARMUP 12
 #define DAS_SWITCH_CONFIRMATIONS 2
+#define DAS_MICROPHONE_PAIRS 3
+#define DAS_STABILITY_MEASUREMENTS 4
+#define DAS_STABILITY_THRESHOLD_DEG 5
+#define DAS_STABILITY_CONFIRMATIONS 50
 
 struct das_localizer {
     unsigned int sample_rate;
     int source_count;
+    das_method_t method;
     int selected_bin_count;
     int first_bin;
     int last_bin;
@@ -26,6 +32,9 @@ struct das_localizer {
     int current_mode_snr;
     int pending_mode_snr;
     int pending_count;
+    unsigned long long accumulated_frames;
+    double active_bins_sum;
+    double mean_weight_sum;
     unsigned long long frame_index;
     double window[DAS_FRAME_LENGTH];
     double frame[DAS_MICROPHONES][DAS_FRAME_LENGTH];
@@ -38,12 +47,42 @@ struct das_localizer {
     double complex *steering;
     double base_spectrum[DAS_ANGLE_COUNT];
     double snr_spectrum[DAS_ANGLE_COUNT];
+    double srp_spectrum[DAS_ANGLE_COUNT];
+    double base_accumulated[DAS_ANGLE_COUNT];
+    double snr_accumulated[DAS_ANGLE_COUNT];
+    double complex phat_accumulated
+        [DAS_MICROPHONE_PAIRS][DAS_FRAME_LENGTH / 2 + 1];
+    int estimate_history
+        [DAS_STABILITY_MEASUREMENTS][DAS_MAX_SOURCES];
+    int estimate_history_count;
+    int estimate_history_position;
+    int consecutive_stable_states;
+    int has_reached_stability;
+    double first_stable_time_s;
 };
 
 static int angular_distance(int a, int b)
 {
     int distance = abs(a - b) % 360;
     return distance > 180 ? 360 - distance : distance;
+}
+
+static void normalize_spectrum(
+    const double input[DAS_ANGLE_COUNT],
+    double output[DAS_ANGLE_COUNT])
+{
+    double minimum = input[0];
+    double maximum = input[0];
+    int angle;
+
+    for (angle = 1; angle < DAS_ANGLE_COUNT; ++angle) {
+        minimum = fmin(minimum, input[angle]);
+        maximum = fmax(maximum, input[angle]);
+    }
+    for (angle = 0; angle < DAS_ANGLE_COUNT; ++angle) {
+        output[angle] =
+            (input[angle] - minimum) / (maximum - minimum + 1e-12);
+    }
 }
 
 static double spatial_confidence(
@@ -130,6 +169,103 @@ static int find_peaks(
     return selected;
 }
 
+static void set_result(
+    das_localizer_t *localizer,
+    const int peaks[DAS_MAX_SOURCES],
+    das_result_t *result)
+{
+    int source;
+
+    memset(result, 0, sizeof(*result));
+    result->frame_index = localizer->frame_index - 1;
+    result->start_time_s = 0.0;
+    result->end_time_s =
+        (double)(((localizer->frame_index - 2) * DAS_HOP_LENGTH) +
+                 DAS_FRAME_LENGTH) /
+        localizer->sample_rate;
+    result->source_count = localizer->source_count;
+    result->method = localizer->method;
+    result->use_snr_mask = localizer->current_mode_snr;
+
+    for (source = 0; source < result->source_count; ++source) {
+        result->angles_deg[source] =
+            peaks[source] == -180 ? 180 : peaks[source];
+        localizer->estimate_history[localizer->estimate_history_position]
+                                   [source] =
+            result->angles_deg[source];
+    }
+    localizer->estimate_history_position =
+        (localizer->estimate_history_position + 1) %
+        DAS_STABILITY_MEASUREMENTS;
+    if (localizer->estimate_history_count < DAS_STABILITY_MEASUREMENTS) {
+        ++localizer->estimate_history_count;
+    }
+
+    result->stability_ready =
+        localizer->estimate_history_count == DAS_STABILITY_MEASUREMENTS;
+    result->stability_measurements = localizer->estimate_history_count;
+    if (result->stability_ready) {
+        int first;
+        int second;
+        int maximum_variation = 0;
+
+        for (first = 0; first < DAS_STABILITY_MEASUREMENTS; ++first) {
+            for (second = first + 1;
+                 second < DAS_STABILITY_MEASUREMENTS;
+                 ++second) {
+                int direction;
+                for (direction = 0; direction < 2; ++direction) {
+                    int from = direction == 0 ? first : second;
+                    int to = direction == 0 ? second : first;
+
+                    for (source = 0;
+                         source < result->source_count;
+                         ++source) {
+                        int candidate;
+                        int nearest = 180;
+                        for (candidate = 0;
+                             candidate < result->source_count;
+                             ++candidate) {
+                            int variation = angular_distance(
+                                localizer->estimate_history[from][source],
+                                localizer->estimate_history[to][candidate]);
+                            if (variation < nearest) {
+                                nearest = variation;
+                            }
+                        }
+                        if (nearest > maximum_variation) {
+                            maximum_variation = nearest;
+                        }
+                    }
+                }
+            }
+        }
+        result->maximum_variation_deg = maximum_variation;
+        result->stable =
+            maximum_variation <= DAS_STABILITY_THRESHOLD_DEG;
+        if (result->stable) {
+            if (localizer->consecutive_stable_states <
+                DAS_STABILITY_CONFIRMATIONS) {
+                ++localizer->consecutive_stable_states;
+            }
+        } else {
+            localizer->consecutive_stable_states = 0;
+        }
+        if (localizer->consecutive_stable_states >=
+                DAS_STABILITY_CONFIRMATIONS &&
+            !localizer->has_reached_stability) {
+            localizer->has_reached_stability = 1;
+            localizer->first_stable_time_s = result->end_time_s;
+        }
+    }
+    result->consecutive_stable_states =
+        localizer->consecutive_stable_states;
+    result->first_stable_time_s =
+        localizer->has_reached_stability
+            ? localizer->first_stable_time_s
+            : -1.0;
+}
+
 static double complex *steering_at(
     das_localizer_t *localizer,
     int selected_bin,
@@ -145,7 +281,8 @@ static double complex *steering_at(
 das_localizer_t *das_localizer_create(
     unsigned int sample_rate,
     double microphone_distance_m,
-    int source_count)
+    int source_count,
+    das_method_t method)
 {
     das_localizer_t *localizer;
     double positions[DAS_MICROPHONES][2] = {
@@ -161,7 +298,9 @@ das_localizer_t *das_localizer_create(
     int angle;
 
     if (sample_rate == 0 || microphone_distance_m <= 0.0 ||
-        source_count < 1 || source_count > DAS_MAX_SOURCES) {
+        source_count < 1 || source_count > DAS_MAX_SOURCES ||
+        (method != DAS_METHOD_ADAPTIVE &&
+         method != DAS_METHOD_SRP_PHAT)) {
         return NULL;
     }
 
@@ -171,10 +310,14 @@ das_localizer_t *das_localizer_create(
     }
     localizer->sample_rate = sample_rate;
     localizer->source_count = source_count;
+    localizer->method = method;
     localizer->first_bin = (int)ceil(
         DAS_MIN_FREQUENCY_HZ * DAS_FRAME_LENGTH / sample_rate);
     localizer->last_bin = (int)floor(
-        DAS_MAX_FREQUENCY_HZ * DAS_FRAME_LENGTH / sample_rate);
+        (method == DAS_METHOD_SRP_PHAT
+             ? SRP_PHAT_MAX_FREQUENCY_HZ
+             : DAS_MAX_FREQUENCY_HZ) *
+        DAS_FRAME_LENGTH / sample_rate);
     localizer->selected_bin_count =
         localizer->last_bin - localizer->first_bin + 1;
 
@@ -246,7 +389,7 @@ void das_localizer_destroy(das_localizer_t *localizer)
 
 int das_localizer_process_hop(
     das_localizer_t *localizer,
-    const float samples[DAS_MICROPHONES][DAS_HOP_LENGTH],
+    float samples[DAS_MICROPHONES][DAS_HOP_LENGTH],
     das_result_t *result)
 {
     double weights[DAS_FRAME_LENGTH / 2 + 1] = {0.0};
@@ -254,10 +397,16 @@ int das_localizer_process_hop(
     int active_bins = 0;
     int base_peaks[DAS_MAX_SOURCES] = {0};
     int snr_peaks[DAS_MAX_SOURCES] = {0};
+    int srp_peaks[DAS_MAX_SOURCES] = {0};
     int microphone;
     int sample;
     int bin;
     int angle;
+    double normalized_base[DAS_ANGLE_COUNT];
+    double normalized_snr[DAS_ANGLE_COUNT];
+    double normalized_srp[DAS_ANGLE_COUNT];
+    double averaged_base[DAS_ANGLE_COUNT] = {0.0};
+    double averaged_snr[DAS_ANGLE_COUNT] = {0.0};
 
     if (localizer == NULL || samples == NULL || result == NULL) {
         return 0;
@@ -287,9 +436,65 @@ int das_localizer_process_hop(
         fftw_execute(localizer->fft_plan);
         for (bin = localizer->first_bin; bin <= localizer->last_bin; ++bin) {
             localizer->spectra[microphone][bin] =
-                localizer->fft_output[bin][0] +
-                I * localizer->fft_output[bin][1];
+                localizer->fft_output[bin];
         }
+    }
+
+    if (localizer->method == DAS_METHOD_SRP_PHAT) {
+        static const int pairs[DAS_MICROPHONE_PAIRS][2] = {
+            {0, 1},
+            {0, 2},
+            {1, 2}
+        };
+        int pair;
+
+        for (bin = localizer->first_bin; bin <= localizer->last_bin; ++bin) {
+            for (pair = 0; pair < DAS_MICROPHONE_PAIRS; ++pair) {
+                int microphone_a = pairs[pair][0];
+                int microphone_b = pairs[pair][1];
+                double complex cross_spectrum =
+                    localizer->spectra[microphone_a][bin] *
+                    conj(localizer->spectra[microphone_b][bin]);
+                double magnitude = cabs(cross_spectrum);
+
+                localizer->phat_accumulated[pair][bin] +=
+                    cross_spectrum / (magnitude + 1e-12);
+            }
+        }
+        ++localizer->accumulated_frames;
+        if (localizer->accumulated_frames <= DAS_DECISION_WARMUP ||
+            localizer->accumulated_frames % DAS_DECISION_INTERVAL != 0) {
+            return 0;
+        }
+
+        memset(localizer->srp_spectrum, 0, sizeof(localizer->srp_spectrum));
+        for (bin = localizer->first_bin; bin <= localizer->last_bin; ++bin) {
+            int selected_bin = bin - localizer->first_bin;
+            for (angle = 0; angle < DAS_ANGLE_COUNT; ++angle) {
+                for (pair = 0; pair < DAS_MICROPHONE_PAIRS; ++pair) {
+                    int microphone_a = pairs[pair][0];
+                    int microphone_b = pairs[pair][1];
+                    double complex phase =
+                        conj(*steering_at(
+                            localizer,
+                            selected_bin,
+                            angle,
+                            microphone_a)) *
+                        *steering_at(
+                            localizer,
+                            selected_bin,
+                            angle,
+                            microphone_b);
+                    localizer->srp_spectrum[angle] += creal(
+                        localizer->phat_accumulated[pair][bin] * phase);
+                }
+            }
+        }
+        normalize_spectrum(localizer->srp_spectrum, normalized_srp);
+        find_peaks(
+            normalized_srp, localizer->source_count, srp_peaks);
+        set_result(localizer, srp_peaks, result);
+        return 1;
     }
 
     for (bin = localizer->first_bin; bin <= localizer->last_bin; ++bin) {
@@ -349,20 +554,48 @@ int das_localizer_process_hop(
         }
     }
 
-    find_peaks(
-        localizer->base_spectrum, localizer->source_count, base_peaks);
-    find_peaks(
-        localizer->snr_spectrum, localizer->source_count, snr_peaks);
+    normalize_spectrum(localizer->base_spectrum, normalized_base);
+    normalize_spectrum(localizer->snr_spectrum, normalized_snr);
+    for (angle = 0; angle < DAS_ANGLE_COUNT; ++angle) {
+        localizer->base_accumulated[angle] += normalized_base[angle];
+        localizer->snr_accumulated[angle] += normalized_snr[angle];
+    }
+    ++localizer->accumulated_frames;
+    localizer->active_bins_sum += active_bins;
+    localizer->mean_weight_sum +=
+        weight_sum / localizer->selected_bin_count;
 
-    if (localizer->frame_index > DAS_DECISION_WARMUP &&
-        localizer->frame_index % DAS_DECISION_INTERVAL == 0) {
+    if (localizer->accumulated_frames <= DAS_DECISION_WARMUP ||
+        localizer->accumulated_frames % DAS_DECISION_INTERVAL != 0) {
+        return 0;
+    }
+
+    for (angle = 0; angle < DAS_ANGLE_COUNT; ++angle) {
+        averaged_base[angle] =
+            localizer->base_accumulated[angle] /
+            (double)localizer->accumulated_frames;
+        averaged_snr[angle] =
+            localizer->snr_accumulated[angle] /
+            (double)localizer->accumulated_frames;
+    }
+    normalize_spectrum(averaged_base, normalized_base);
+    normalize_spectrum(averaged_snr, normalized_snr);
+
+    find_peaks(
+        normalized_base, localizer->source_count, base_peaks);
+    find_peaks(
+        normalized_snr, localizer->source_count, snr_peaks);
+
+    {
         double base_confidence = spatial_confidence(
-            localizer->base_spectrum, base_peaks, localizer->source_count);
+            normalized_base, base_peaks, localizer->source_count);
         double snr_confidence = spatial_confidence(
-            localizer->snr_spectrum, snr_peaks, localizer->source_count);
+            normalized_snr, snr_peaks, localizer->source_count);
         int mask_valid =
-            active_bins >= 20 &&
-            weight_sum / localizer->selected_bin_count >= 0.15;
+            localizer->active_bins_sum /
+                (double)localizer->accumulated_frames >= 20.0 &&
+            localizer->mean_weight_sum /
+                (double)localizer->accumulated_frames >= 0.15;
         int requested_mode =
             mask_valid && snr_confidence > 1.05 * base_confidence;
 
@@ -379,31 +612,10 @@ int das_localizer_process_hop(
             localizer->pending_count = 0;
         }
     }
-
-    memset(result, 0, sizeof(*result));
-    result->frame_index = localizer->frame_index - 1;
-    result->start_time_s =
-        (double)((localizer->frame_index - 2) * DAS_HOP_LENGTH) /
-        localizer->sample_rate;
-    result->end_time_s =
-        result->start_time_s +
-        (double)DAS_FRAME_LENGTH / localizer->sample_rate;
-    result->source_count = localizer->source_count;
-    result->use_snr_mask = localizer->current_mode_snr;
-    if (result->use_snr_mask) {
-        memcpy(
-            result->angles_deg,
-            snr_peaks,
-            (size_t)localizer->source_count * sizeof(int));
-        result->confidence = spatial_confidence(
-            localizer->snr_spectrum, snr_peaks, localizer->source_count);
+    if (localizer->current_mode_snr) {
+        set_result(localizer, snr_peaks, result);
     } else {
-        memcpy(
-            result->angles_deg,
-            base_peaks,
-            (size_t)localizer->source_count * sizeof(int));
-        result->confidence = spatial_confidence(
-            localizer->base_spectrum, base_peaks, localizer->source_count);
+        set_result(localizer, base_peaks, result);
     }
     return 1;
 }

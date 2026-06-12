@@ -2,14 +2,15 @@
 
 set -u
 
-if [[ $# -ne 3 ]]; then
-  echo "Uso: $0 CARPETA_GRABACIONES SOCKET_RESULTADOS NUMERO_FUENTES" >&2
+if [[ $# -ne 4 ]]; then
+  echo "Uso: $0 CARPETA_GRABACIONES SOCKET_RESULTADOS NUMERO_FUENTES METODO" >&2
   exit 2
 fi
 
 case_directory=$1
 result_socket=$2
 source_count=$3
+method=$4
 script_directory=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 build_directory="${script_directory}/build"
 localizer_pid=
@@ -30,6 +31,11 @@ trap cleanup EXIT INT TERM
 
 if [[ ! "${source_count}" =~ ^[1-4]$ ]]; then
   echo "NUMERO_FUENTES debe estar entre 1 y 4." >&2
+  exit 2
+fi
+
+if [[ "${method}" != "adaptive" && "${method}" != "srp-phat" ]]; then
+  echo "METODO debe ser adaptive o srp-phat." >&2
   exit 2
 fi
 
@@ -58,7 +64,7 @@ if [[ -z "${microphone_distance}" ]]; then
 fi
 
 "${build_directory}/jack_das_localizer" \
-  "${result_socket}" "${microphone_distance}" "${source_count}" &
+  "${result_socket}" "${microphone_distance}" "${source_count}" "${method}" &
 localizer_pid=$!
 sleep 1
 

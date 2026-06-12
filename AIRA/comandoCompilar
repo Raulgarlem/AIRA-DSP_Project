@@ -1,4 +1,6 @@
-mkdir -p build
+cd ~/ProyectoFinal/AIRA
+rm -rf build
+mkdir build
 cd build
 cmake ..
 make -j$(nproc)

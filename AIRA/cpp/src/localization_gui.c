@@ -13,6 +13,7 @@
 
 typedef struct {
     GtkWidget *window;
+    GtkWidget *method_combo;
     GtkWidget *folder_chooser;
     GtkWidget *play_button;
     GtkWidget *stop_button;
@@ -22,7 +23,7 @@ typedef struct {
     GtkWidget *window_label;
     GtkWidget *calculated_angles_label;
     GtkWidget *mode_label;
-    GtkWidget *confidence_label;
+    GtkWidget *stability_label;
     GSubprocess *script_process;
     int socket_fd;
     char socket_path[108];
@@ -134,6 +135,7 @@ static void stop_session(app_state_t *state)
     }
     gtk_widget_set_sensitive(state->play_button, TRUE);
     gtk_widget_set_sensitive(state->stop_button, FALSE);
+    gtk_widget_set_sensitive(state->method_combo, TRUE);
     gtk_widget_set_sensitive(state->folder_chooser, TRUE);
 }
 
@@ -185,21 +187,34 @@ static gboolean poll_results(gpointer user_data)
         unsigned long long frame;
         double start;
         double end;
-        double confidence;
+        int stable;
+        int measurements;
+        int variation;
+        int consecutive;
+        double stable_time;
+        char method[16];
         char mode[16];
         char angles[128];
         char window_text[128];
-        char confidence_text[64];
+        char method_text[64];
+        char stability_text[128];
 
         if (sscanf(
                 latest,
-                "RESULT frame=%llu start=%lf end=%lf mode=%15s confidence=%lf angles=%127s",
+                "RESULT frame=%llu start=%lf end=%lf method=%15s mode=%15s "
+                "stable=%d measurements=%d variation=%d consecutive=%d "
+                "stable_time=%lf angles=%127s",
                 &frame,
                 &start,
                 &end,
+                method,
                 mode,
-                &confidence,
-                angles) == 6) {
+                &stable,
+                &measurements,
+                &variation,
+                &consecutive,
+                &stable_time,
+                angles) == 11) {
             char *cursor;
             (void)frame;
             for (cursor = angles; *cursor != '\0'; ++cursor) {
@@ -213,26 +228,59 @@ static gboolean poll_results(gpointer user_data)
                 "%.3f - %.3f s",
                 start,
                 end);
-            snprintf(
-                confidence_text,
-                sizeof(confidence_text),
-                "%.3f",
-                confidence);
-
-            /* These labels are replaced; no angle history is accumulated. */
-            set_label_value(state->window_label, "Ventana:", window_text);
+            if (strcmp(method, "srp-phat") == 0) {
+                snprintf(method_text, sizeof(method_text), "SRP-PHAT");
+            } else {
+                snprintf(
+                    method_text,
+                    sizeof(method_text),
+                    "DAS adaptativo (%s)",
+                    strcmp(mode, "snr") == 0 ? "mascara SNR" : "base");
+            }
+            if (stable < 0) {
+                snprintf(
+                    stability_text,
+                    sizeof(stability_text),
+                    "Historial %d/4 mediciones; "
+                    "confirmacion estable 0/50 estados",
+                    measurements);
+            } else {
+                if (stable_time >= 0.0) {
+                    snprintf(
+                        stability_text,
+                        sizeof(stability_text),
+                        "%s, variacion maxima %d grados; "
+                        "confirmacion 50/50, estabilidad confirmada en %.3f s",
+                        stable ? "Estable" : "Inestable",
+                        variation,
+                        stable_time);
+                } else {
+                    snprintf(
+                        stability_text,
+                        sizeof(stability_text),
+                        "%s, variacion maxima %d grados; "
+                        "confirmacion estable %d/50 estados",
+                        stable ? "Estable" : "Inestable",
+                        variation,
+                        consecutive);
+                }
+            }
+            set_label_value(
+                state->window_label,
+                "Estimacion acumulada:",
+                window_text);
             set_label_value(
                 state->calculated_angles_label,
                 "Angulos calculados:",
                 angles);
             set_label_value(
                 state->mode_label,
-                "Modo DAS:",
-                strcmp(mode, "snr") == 0 ? "mascara SNR" : "base");
+                "Metodo activo:",
+                method_text);
             set_label_value(
-                state->confidence_label,
-                "Confianza:",
-                confidence_text);
+                state->stability_label,
+                "Estabilidad:",
+                stability_text);
             gtk_label_set_text(GTK_LABEL(state->status_label), "Procesando.");
         }
     } else if (received < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -328,6 +376,7 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
     char distance_text[64];
     char true_angles_text[128] = {0};
     char source_count_text[16];
+    const char *method;
     char *script_path;
     char *aira_directory;
     GSubprocessLauncher *launcher;
@@ -337,6 +386,12 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
 
     if (folder == NULL) {
         show_error(state, "Seleccione primero una carpeta.");
+        return;
+    }
+    method = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->method_combo));
+    if (method == NULL) {
+        show_error(state, "Seleccione un metodo de localizacion.");
+        g_free(folder);
         return;
     }
     if (!validate_wav_files(folder, &error_message) ||
@@ -374,17 +429,15 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
         state->true_angles_label,
         "Angulos reales:",
         true_angles_text);
-    set_label_value(state->window_label, "Ventana:", "-");
+    set_label_value(state->window_label, "Estimacion acumulada:", "-");
     set_label_value(state->calculated_angles_label, "Angulos calculados:", "-");
-    set_label_value(state->mode_label, "Modo DAS:", "-");
-    set_label_value(state->confidence_label, "Confianza:", "-");
+    set_label_value(state->mode_label, "Metodo activo:", "-");
+    set_label_value(state->stability_label, "Estabilidad:", "-");
 
     aira_directory = find_aira_directory();
     script_path = g_build_filename(aira_directory, "StartProjectScript.sh", NULL);
 
-    launcher = g_subprocess_launcher_new(
-        G_SUBPROCESS_FLAGS_STDOUT_INHERIT |
-        G_SUBPROCESS_FLAGS_STDERR_INHERIT);
+    launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_NONE);
     g_subprocess_launcher_set_cwd(launcher, aira_directory);
     state->script_process = g_subprocess_launcher_spawn(
         launcher,
@@ -394,6 +447,7 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
         folder,
         state->socket_path,
         source_count_text,
+        method,
         NULL);
     g_object_unref(launcher);
     g_free(script_path);
@@ -410,6 +464,7 @@ static void on_play_clicked(GtkButton *button, gpointer user_data)
         state->script_process, NULL, on_script_finished, state);
     gtk_widget_set_sensitive(state->play_button, FALSE);
     gtk_widget_set_sensitive(state->stop_button, TRUE);
+    gtk_widget_set_sensitive(state->method_combo, FALSE);
     gtk_widget_set_sensitive(state->folder_chooser, FALSE);
     gtk_label_set_text(
         GTK_LABEL(state->status_label),
@@ -443,8 +498,8 @@ int main(int argc, char **argv)
     state.socket_fd = -1;
 
     state.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(state.window), "Localizacion DAS AIRA");
-    gtk_window_set_default_size(GTK_WINDOW(state.window), 680, 390);
+    gtk_window_set_title(GTK_WINDOW(state.window), "Localizacion AIRA");
+    gtk_window_set_default_size(GTK_WINDOW(state.window), 850, 460);
     gtk_container_set_border_width(GTK_CONTAINER(state.window), 20);
     g_signal_connect(
         state.window, "destroy", G_CALLBACK(on_window_destroy), &state);
@@ -457,15 +512,28 @@ int main(int argc, char **argv)
     title = gtk_label_new(NULL);
     gtk_label_set_markup(
         GTK_LABEL(title),
-        "<span size=\"x-large\"><b>Localizacion DAS adaptativa</b></span>");
+        "<span size=\"x-large\"><b>Localizacion de fuentes</b></span>");
     gtk_widget_set_halign(title, GTK_ALIGN_START);
     gtk_grid_attach(GTK_GRID(grid), title, 0, 0, 3, 1);
+
+    state.method_combo = gtk_combo_box_text_new();
+    gtk_combo_box_text_append(
+        GTK_COMBO_BOX_TEXT(state.method_combo),
+        "adaptive",
+        "DAS adaptativo");
+    gtk_combo_box_text_append(
+        GTK_COMBO_BOX_TEXT(state.method_combo),
+        "srp-phat",
+        "SRP-PHAT");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.method_combo), 0);
+    gtk_widget_set_hexpand(state.method_combo, TRUE);
+    gtk_grid_attach(GTK_GRID(grid), state.method_combo, 0, 1, 3, 1);
 
     state.folder_chooser = gtk_file_chooser_button_new(
         "Seleccione la carpeta de grabaciones",
         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER);
     gtk_widget_set_hexpand(state.folder_chooser, TRUE);
-    gtk_grid_attach(GTK_GRID(grid), state.folder_chooser, 0, 1, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.folder_chooser, 0, 2, 3, 1);
 
     state.play_button = gtk_button_new_with_label("Play");
     state.stop_button = gtk_button_new_with_label("Stop");
@@ -474,39 +542,39 @@ int main(int argc, char **argv)
         state.play_button, "clicked", G_CALLBACK(on_play_clicked), &state);
     g_signal_connect(
         state.stop_button, "clicked", G_CALLBACK(on_stop_clicked), &state);
-    gtk_grid_attach(GTK_GRID(grid), state.play_button, 0, 2, 1, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.stop_button, 1, 2, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.play_button, 0, 3, 1, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.stop_button, 1, 3, 1, 1);
 
     state.status_label = gtk_label_new("Listo.");
     gtk_widget_set_halign(state.status_label, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), state.status_label, 0, 3, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.status_label, 0, 4, 3, 1);
 
     state.distance_label = gtk_label_new(NULL);
     state.true_angles_label = gtk_label_new(NULL);
     state.window_label = gtk_label_new(NULL);
     state.calculated_angles_label = gtk_label_new(NULL);
     state.mode_label = gtk_label_new(NULL);
-    state.confidence_label = gtk_label_new(NULL);
+    state.stability_label = gtk_label_new(NULL);
     set_label_value(state.distance_label, "Distancia:", "-");
     set_label_value(state.true_angles_label, "Angulos reales:", "-");
-    set_label_value(state.window_label, "Ventana:", "-");
+    set_label_value(state.window_label, "Estimacion acumulada:", "-");
     set_label_value(state.calculated_angles_label, "Angulos calculados:", "-");
-    set_label_value(state.mode_label, "Modo DAS:", "-");
-    set_label_value(state.confidence_label, "Confianza:", "-");
+    set_label_value(state.mode_label, "Metodo activo:", "-");
+    set_label_value(state.stability_label, "Estabilidad:", "-");
 
     gtk_widget_set_halign(state.distance_label, GTK_ALIGN_START);
     gtk_widget_set_halign(state.true_angles_label, GTK_ALIGN_START);
     gtk_widget_set_halign(state.window_label, GTK_ALIGN_START);
     gtk_widget_set_halign(state.calculated_angles_label, GTK_ALIGN_START);
     gtk_widget_set_halign(state.mode_label, GTK_ALIGN_START);
-    gtk_widget_set_halign(state.confidence_label, GTK_ALIGN_START);
-    gtk_grid_attach(GTK_GRID(grid), state.distance_label, 0, 4, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.true_angles_label, 0, 5, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.window_label, 0, 6, 3, 1);
+    gtk_widget_set_halign(state.stability_label, GTK_ALIGN_START);
+    gtk_grid_attach(GTK_GRID(grid), state.distance_label, 0, 5, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.true_angles_label, 0, 6, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.window_label, 0, 7, 3, 1);
     gtk_grid_attach(
-        GTK_GRID(grid), state.calculated_angles_label, 0, 7, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.mode_label, 0, 8, 3, 1);
-    gtk_grid_attach(GTK_GRID(grid), state.confidence_label, 0, 9, 3, 1);
+        GTK_GRID(grid), state.calculated_angles_label, 0, 8, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.mode_label, 0, 9, 3, 1);
+    gtk_grid_attach(GTK_GRID(grid), state.stability_label, 0, 10, 3, 1);
 
     gtk_widget_show_all(state.window);
     gtk_main();
